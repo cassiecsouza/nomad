@@ -33,7 +33,15 @@ phases:
     - type: SHELL_SCRIPT
       name: Nomad and Docker Build
       properties:
+        commandPath: null
+        connectionAttributeName: null
         executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
         timeoutMillis: 600000
       templateUri: cassie-test/Nomad and Docker Build:latest
     stepsInParallel: false
