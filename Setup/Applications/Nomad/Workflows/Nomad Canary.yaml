@@ -521,16 +521,6 @@ phases:
   statefulSet: false
 postDeploymentSteps:
 - type: SHELL_SCRIPT
-  name: Cleanup nomad deploy
-  properties:
-    delegateSelectors:
-    - heavy-lifter
-    executeOnDelegate: true
-    timeoutMillis: 600000
-  templateVariables:
-  - name: DEPLOY_ID
-    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
-- type: SHELL_SCRIPT
   name: Deploy Success Notification
   properties:
     commandPath: null
@@ -559,6 +549,16 @@ postDeploymentSteps:
   - name: WORKFLOW_CUSTOM_MSG
   - name: PIPELINE_CUSTOM_MSG
   - name: PIPELINE_SPARK_IDS
+- type: SHELL_SCRIPT
+  name: Cleanup nomad deploy
+  properties:
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    timeoutMillis: 600000
+  templateVariables:
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
 preDeploymentSteps:
 - type: SHELL_SCRIPT
   name: Enforce Workflow Access
