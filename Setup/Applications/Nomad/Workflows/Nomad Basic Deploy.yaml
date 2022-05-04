@@ -30,6 +30,12 @@ phases:
       name: Fetch Instances
       properties:
         stateTimeoutInMinutes: 1
+    - type: SHELL_SCRIPT
+      name: Nomad and Docker Build
+      properties:
+        executeOnDelegate: true
+        timeoutMillis: 600000
+      templateUri: cassie-test/Nomad and Docker Build:latest
     stepsInParallel: false
   - type: CUSTOM_DEPLOYMENT_PHASE_STEP
     name: Verify Service
