@@ -521,54 +521,6 @@ phases:
   statefulSet: false
 postDeploymentSteps:
 - type: SHELL_SCRIPT
-  name: Record Successful Deploy Metrics
-  properties:
-    commandPath: null
-    connectionAttributeName: null
-    delegateSelectors:
-    - heavy-lifter
-    executeOnDelegate: true
-    host: null
-    publishAsVar: false
-    sshKeyRefName: null
-    sweepingOutputName: null
-    sweepingOutputScope: null
-    templateExpressions: null
-    timeoutMillis: 600000
-  templateVariables:
-  - name: DEPLOY_OK
-    value: 'true'
-  - name: DEPLOY_ID
-    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
-- type: SHELL_SCRIPT
-  name: Publish Deployment to CDP
-  properties:
-    commandPath: null
-    connectionAttributeName: null
-    delegateSelectors:
-    - heavy-lifter
-    executeOnDelegate: true
-    host: null
-    publishAsVar: false
-    sshKeyRefName: null
-    sweepingOutputName: null
-    sweepingOutputScope: null
-    templateExpressions: null
-    timeoutMillis: 345600000
-  templateVariables:
-  - name: DEPLOY_OK
-    value: 'true'
-  - name: DEPLOY_ID
-    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
-  - name: DEPLOY_FINISH_TIME
-    value: ${context.NOMAD_DEPLOYMENT.DEPLOY_FINISH_TIME_IN_SECONDS}
-  - name: CDP_CLUSTER
-    value: prod-achm
-  - name: CDP_REGION
-    value: US-EAST
-  - name: CDP_ENV_TYPE
-    value: Production
-- type: SHELL_SCRIPT
   name: Cleanup nomad deploy
   properties:
     delegateSelectors:
