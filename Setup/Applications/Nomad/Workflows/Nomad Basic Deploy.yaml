@@ -40,6 +40,12 @@ phases:
         templateExpressions: null
         timeoutMillis: 600000
       templateUri: cassie-test/Nomad and Docker Build:latest
+    - type: SHELL_SCRIPT
+      name: Deploy Service
+      properties:
+        executeOnDelegate: true
+        timeoutMillis: 600000
+      templateUri: cassie-test/Deploy Service:latest
     stepsInParallel: false
   - type: CUSTOM_DEPLOYMENT_PHASE_STEP
     name: Verify Service
