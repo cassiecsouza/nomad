@@ -26,10 +26,6 @@ phases:
   - type: CUSTOM_DEPLOYMENT_PHASE_STEP
     name: Deploy
     steps:
-    - type: CUSTOM_DEPLOYMENT_FETCH_INSTANCES
-      name: Fetch Instances
-      properties:
-        stateTimeoutInMinutes: 1
     - type: SHELL_SCRIPT
       name: Nomad and Docker Build
       properties:
