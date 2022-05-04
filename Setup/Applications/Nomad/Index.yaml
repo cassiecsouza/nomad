@@ -1,0 +1,6 @@
+harnessApiVersion: '1.0'
+type: APPLICATION
+branchName: main
+description: Nomad Example App
+gitConnector: Github
+isGitSyncEnabled: true
