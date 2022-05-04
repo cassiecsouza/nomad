@@ -40,6 +40,9 @@ phases:
         templateExpressions: null
         timeoutMillis: 600000
       templateUri: cassie-test/Nomad and Docker Build:latest
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}, OVERRIDE_DEPLOY_TYPE
     - type: SHELL_SCRIPT
       name: Deploy Service
       properties:
