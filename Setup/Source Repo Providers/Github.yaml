@@ -1,6 +1,7 @@
 harnessApiVersion: '1.0'
 type: GIT
 authorEmailId: casie.souza@harness.io
+branch: main
 commitMessage: always here :)
 keyAuth: false
 password: gcpkms:cassie-github
