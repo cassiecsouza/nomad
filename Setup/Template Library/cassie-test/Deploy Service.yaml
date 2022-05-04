@@ -1,0 +1,316 @@
+harnessApiVersion: '1.0'
+type: SHELL_SCRIPT
+outputVars: NOMAD_URL,NOMAD_INSTANCE_URL,LOG_URL,JENKINS_JOB,DEPLOY_FINISH_TIME_IN_SECONDS
+scriptString: |
+  harnessApiVersion: '1.0'
+  type: SHELL_SCRIPT
+  outputVars: NOMAD_URL,NOMAD_INSTANCE_URL,LOG_URL,JENKINS_JOB,DEPLOY_FINISH_TIME_IN_SECONDS
+  scriptString: |-
+    function extract_configuration(){
+        local tar_file=$1
+        if gpg --batch --yes --passphrase "${app.defaults.CONFIGURATION_KEY}" -o cache-secrets.tar.gz "${tar_file}"; then
+          rm -rf configuration
+          mkdir configuration
+          pushd configuration
+          set +x
+          echo "Tar file is: ${tar_file}"
+          tar -xzf ../cache-secrets.tar.gz
+          rm -rf ../cache-secrets.tar.gz
+          popd
+        else
+          echo "FATAL: failed to extract configuration files"
+          exit 1
+        fi
+    }
+
+
+    # download configuration files from cos and extract the files to folder "configuration"
+    function download_configuration_from_cos(){
+        local hash_value=$1
+        local file_name="${hash_value}.tar.gz.enc"
+        local file_path="s3://harness-bucket-apdx1/configuration/${file_name}"
+        local cache_path="/data/configuration/"
+
+        if [[ -z "${hash_value}" ]]; then
+          echo "FATAL: hash_value is empty"
+          exit 1
+        fi
+
+        if [[ -f "${cache_path}${file_name}" && "${hash_value}" != "HEAD" ]]; then
+            echo "File ${file_name} already exists, no need to download it again, copy it to local"
+            cp "${cache_path}${file_name}" "./"
+        else
+            # start downloading
+            # backup original aws credentials before s3 operations. Be sure this operation not pollute the environment
+            ORIGINAL_AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            ORIGINAL_AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+            # export aws key
+            export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+            export AWS_REGION="${app.defaults.AWS_S3_REGION}"
+
+            if aws s3 cp "${file_path}" "./" --no-progress; then
+              echo "SUCCESS: Downloaded ${file_name} to local!"
+            else
+              # exit if failed to copy, skip the rest actions
+              exit 1
+            fi
+
+            if [[ "${hash_value}" == "HEAD" ]]; then
+                echo "SKIP COPY: configuration version is HEAD"
+            else
+                # in case some delegates don't have this directory
+                mkdir -p "${cache_path}"
+                if cp "./${file_name}" "${cache_path}"; then
+                   echo "SUCCESS: copy ${file_name} to ${cache_path}"
+                else
+                   echo "IGNORE: failed to copy ${file_name} to ${cache_path}"
+                fi
+            fi
+
+            # restore previous environment settings
+            export AWS_ACCESS_KEY_ID="${ORIGINAL_AWS_ACCESS_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${ORIGINAL_AWS_SECRET_ACCESS_KEY}"
+        fi
+
+        # start extract configuration files
+        if extract_configuration "./${file_name}"; then
+          echo "SUCCESS: Configuration files extracted"
+        else
+          exit 1
+        fi
+    }
+    # Deploy a staged SPLAT deploy
+
+    set -e
+
+    echo "DEPLOY_ID=${DEPLOY_ID}"
+
+    # Load up the various values.
+    export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+    export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+    export AWS_REGION="${app.defaults.AWS_S3_REGION}"
+    export FIRE_AND_FORGET="${workflow.variables.FIRE_AND_FORGET}"
+    CONTAINER_NAME=harness_deployer-${DEPLOY_ID}
+    WORKDIR="/deploy-workspace"
+
+    # Setup the local staging directory and obtain all files.
+    mkdir -p /tmp/${DEPLOY_ID}
+    cd /tmp/${DEPLOY_ID}
+    LOCAL_WORKDIR=$(pwd)
+    export DOCKER_CONFIG=${LOCAL_WORKDIR}/.docker
+
+    # Pull the workspace files from S3
+    rm -rf workspace
+    mkdir workspace
+    pushd workspace
+    aws s3 cp s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/ . --recursive --no-progress
+    source setupvars.sh
+
+    # Handle Canary values
+    DEPLOY_DONE_MARK_FILE="deploy_full_done"
+    FETCH_SUFFIX="full"
+    if [[ "${OVERRIDE_CANARY_TRAFFIC}" != "" ]]; then
+      CANARY_OPTS="--canary --traffic ${OVERRIDE_CANARY_TRAFFIC}"
+      FETCH_SUFFIX="canary"
+      DEPLOY_DONE_MARK_FILE="deploy_canary_${OVERRIDE_CANARY_TRAFFIC}_done"
+    fi
+    echo "CANARY_OPTS=|${CANARY_OPTS}|"
+
+    FIRE_AND_FORGET_OPT=""
+    if [[ "${FIRE_AND_FORGET}" == "true" ]]; then
+      FIRE_AND_FORGET_OPT="--skip-validation"
+    fi
+
+    # add version check for full deploy for workflow in a pipeline
+    current_deploy_url=${deploymentUrl}
+
+    if [[ "${FETCH_SUFFIX}" == "full" && "$current_deploy_url" == *"pipeline-execution"* ]]; then
+      count_awsfile=$(aws s3 ls s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${DEPLOY_ENV}.latest | wc -l)
+      if [[ $count_awsfile -gt 0 ]]; then
+        aws s3 cp s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${DEPLOY_ENV}.latest ${DEPLOY_ENV}.json --no-progress --sse AES256
+      fi
+      current_pipeline_exec_id=pipeline${workflow.pipelineDeploymentUuid}
+      count_awsfile=$(aws s3 ls s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${current_pipeline_exec_id}.json | wc -l)
+      if [[ $count_awsfile -gt 0 ]]; then
+        aws s3 cp s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${current_pipeline_exec_id}.json ${current_pipeline_exec_id}.json --no-progress --sse AES256
+      fi
+
+      if [[ -f ${DEPLOY_ENV}.json && -f ${current_pipeline_exec_id}.json ]]; then
+        expected_version=$(eval "jq '.[\"${DEPLOY_ENV}\"]' ${current_pipeline_exec_id}.json")
+        actual_version=$(jq '.version' ${DEPLOY_ENV}.json)
+        if [[ "$expected_version" != "null" && "$expected_version" != "$actual_version" ]]; then
+          echo "!!! Before deploy ${artifact.artifactPath} on ${DEPLOY_ENV}, it is expected to have version ${expected_version} there, but ${actual_version} found actually"
+          echo "version has been updated during pipeline run, to avoid possible unexpected rollback, exiting now."
+          cd ~
+          rm -rf /tmp/${DEPLOY_ID}
+          exit 2
+        fi
+      fi
+    fi
+    popd
+
+    # Add the configuration files and decrypt.
+    download_configuration_from_cos "${CONFIG_HASH}"
+
+    # Pull the container down; ensures that it's the latest-and-greatest.
+    AWS_ECR_PASSWORD=$(aws ecr get-login-password)
+    echo ${AWS_ECR_PASSWORD} | docker login -u AWS --password-stdin 783772908578.dkr.ecr.us-west-2.amazonaws.com
+    docker pull 783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest
+
+    # Yeah, this seems like crazy overkill. But need to get the public host name of this host and it can't be done
+    # or determine from within the Harness container. But it can be done from a container that's attached to the host
+    # network interface.
+    #CONSUL_HOSTNAME=$(docker run --rm --network host \
+    #  783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest \
+    #  /bin/bash -c "curl -s http://\$(hostname)-admin.wbx2.com:8500/v1/catalog/service/consul | \
+    #  jq -r '.[0].Address' | tr -d '\n'")
+    DOCKER_HOSTNAME=$(docker run --rm --network host 783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest hostname | tr -d '\n')
+    echo "DOCKER_HOSTNAME=${DOCKER_HOSTNAME}"
+
+    # Start the container up and put it in idle so that multiple commands can be executed against it.
+    docker run -d --rm --name ${CONTAINER_NAME} --network host \
+      -e CONSUL_NO_BASTION=${DOCKER_HOSTNAME}-admin.wbx2.com -e CONSUL_API_TOKEN=${CONSUL_API_TOKEN} \
+      -v python-venvs:/python-venvs -v /var/run/docker.sock:/var/run/docker.sock \
+      783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest tail -f /dev/null
+
+    # Populate the container with the necessary files.
+    docker exec ${CONTAINER_NAME} mkdir -p ${WORKDIR}
+    docker cp . ${CONTAINER_NAME}:${WORKDIR}
+    docker exec ${CONTAINER_NAME} mkdir -p ${WORKDIR}/configuration/deploy-logs
+    docker exec ${CONTAINER_NAME} touch ${WORKDIR}/configuration/deploy-logs/marker.txt
+
+    # Deploy the image.
+    docker exec ${CONTAINER_NAME} /bin/bash -c "source /venv.sh ${WORKDIR}/configuration/scripts/requirements.txt && \
+      source ${WORKDIR}/workspace/harness.sh && \
+      cd ${WORKDIR}/configuration && \
+      python scripts/deploy-splat.py harness-deploy \
+      --harness-dir ${WORKDIR}/workspace \
+      --version ${DEPLOY_VERSION} \
+      ${CANARY_OPTS} \
+      ${FIRE_AND_FORGET_OPT} \
+      --env ${DEPLOY_ENV} ${DEPLOY_APPNAME} || echo failed > ${WORKDIR}/workspace/failed_${FETCH_SUFFIX}${OVERRIDE_CANARY_TRAFFIC}_deploy"
+
+    # Pull the generated files from the container and push to S3
+    pushd workspace
+    docker cp ${CONTAINER_NAME}:${WORKDIR}/workspace/. .
+    aws s3 cp . s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/ --no-progress --sse AES256 --recursive
+    if [[ -f nomad_vars.sh ]]; then
+      source nomad_vars.sh
+    fi
+
+    # Pull the deploy logs
+    mkdir -p deploy-logs
+    pushd deploy-logs
+    docker cp ${CONTAINER_NAME}:${WORKDIR}/configuration/deploy-logs/. .
+    ZIP_FILENAME=$(echo -n `date '+%Y-%m-%d_%H-%M-%S.zip'`)
+    popd
+    zip -r ${ZIP_FILENAME} deploy-logs
+    aws s3 cp ${ZIP_FILENAME} s3://harness-bucket-apdx1/logs/${DEPLOY_ID}/ --no-progress --sse AES256
+    export LOG_URL=$(aws s3 presign s3://harness-bucket-apdx1/logs/${DEPLOY_ID}/${ZIP_FILENAME} --expires-in 604800)
+    # copy deploy log url info to a file, then it can be used by rollback step if needed
+    echo ${LOG_URL} > deploy_log_url.txt
+    aws s3 cp deploy_log_url.txt s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/deploy_${FETCH_SUFFIX}${OVERRIDE_CANARY_TRAFFIC}_log_url.txt --no-progress --sse AES256
+    echo "Deploy Logs: ${LOG_URL}"
+
+    popd
+
+
+    # Kill the container
+    docker rm -f ${CONTAINER_NAME}
+
+    if [[ -f "/tmp/${DEPLOY_ID}/workspace/failed_${FETCH_SUFFIX}${OVERRIDE_CANARY_TRAFFIC}_deploy" ]]; then
+      echo "The ${FETCH_SUFFIX} deploy failed"
+      cd ~
+      rm -rf /tmp/${DEPLOY_ID}
+      exit 1
+    fi
+
+    # Save the full deploy version info for the deploy env
+    if [[ "${FETCH_SUFFIX}" == "full" ]]; then
+      # copy last deploy info before getting overwritten later
+      mkdir -p /tmp/${DEPLOY_ID}/full
+      count_awsfile=$(aws s3 ls s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${DEPLOY_ENV}.latest | wc -l)
+      if [[ $count_awsfile -gt 0 ]]; then
+        aws s3 cp s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/${DEPLOY_ENV}.latest /tmp/${DEPLOY_ID}/full/${DEPLOY_ENV}.prev --no-progress --sse AES256
+      fi
+      count_awsfile=$(aws s3 ls s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/nomad_job.json.${DEPLOY_ENV} | wc -l)
+      if [[ $count_awsfile -gt 0 ]]; then
+        aws s3 cp s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/nomad_job.json.${DEPLOY_ENV} /tmp/${DEPLOY_ID}/full/nomad_job.json.${DEPLOY_ENV}.prev --no-progress --sse AES256
+      fi
+
+      version_str=$(basename $(dirname ${artifact.artifactPath}))
+      # for Mac-OS user, need try below steps to get current milliseconds
+      # % brew install coreutils
+      # % $(gdate +%s%3N)
+      deploy_time=$(date +%s%3N)
+      tmp_file=/tmp/${DEPLOY_ID}/${DEPLOY_ENV}.latest
+      echo '{}' > "${tmp_file}"
+      echo $(cat "${tmp_file}" | jq --arg value "${deploy_time}" '. + {'deploy_time': $value}') > "${tmp_file}"
+      echo $(cat "${tmp_file}" | jq --arg value "${version_str}" '. + {'version': $value}') > "${tmp_file}"
+      aws s3 cp ${tmp_file} s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/ --no-progress --sse AES256
+      aws s3 cp /tmp/${DEPLOY_ID}/workspace/nomad_job.json s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/nomad_job.json.${DEPLOY_ENV} --no-progress --sse AES256
+
+      pushd full
+      aws s3 cp . s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/ --no-progress --sse AES256 --recursive
+      popd
+
+    fi
+
+    #deploy done marker file upload
+    echo 'ok' > /tmp/${DEPLOY_ID}/${DEPLOY_DONE_MARK_FILE}
+    aws s3 cp /tmp/${DEPLOY_ID}/${DEPLOY_DONE_MARK_FILE} s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/ --no-progress --sse AES256
+
+    # Write the Fetch Instances data out
+    FETCH_INSTANCE_FILENAME=${DEPLOY_APPNAME}-${DEPLOY_ENV}.sh
+    cat <<EOT >> ${FETCH_INSTANCE_FILENAME}
+    export NOMAD_URL="${NOMAD_URL}"
+    export NOMAD_INSTANCE_URL="${NOMAD_INSTANCE_URL}"
+    EOT
+
+    if [[ -f "/tmp/${DEPLOY_ID}/workspace/config_head_${DEPLOY_ENV}.txt" ]]; then
+      echo "config_head_${DEPLOY_ENV} exists"
+    else
+      config_head_count=$(aws s3 ls s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/config_head_${DEPLOY_ENV}.txt | wc -l)
+      if [[ config_head_count -gt 0 ]]; then
+        aws s3 cp s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/config_head_${DEPLOY_ENV}.txt /tmp/${DEPLOY_ID}/workspace/ --no-progress --sse AES256
+      fi
+    fi
+
+    aws s3 cp ${FETCH_INSTANCE_FILENAME} s3://harness-bucket-apdx1/fetch-instances/${FETCH_INSTANCE_FILENAME} --no-progress --sse AES256
+
+    JOB_URL="https://sqbu-jenkins.wbx2.com/support/job/platform/job/secrets/job/validate-service-configs/buildWithParameters?"
+
+    if [[ -f "/tmp/${DEPLOY_ID}/workspace/config_head_${DEPLOY_ENV}.txt" ]]; then
+      PREVIOUS_CONFIG_HASH=`cat /tmp/${DEPLOY_ID}/workspace/config_head_${DEPLOY_ENV}.txt`
+    fi
+
+    echo ${CONFIG_HASH} > /tmp/${DEPLOY_ID}/config_head_${DEPLOY_ENV}.txt
+    aws s3 cp /tmp/${DEPLOY_ID}/config_head_${DEPLOY_ENV}.txt s3://harness-bucket-apdx1/splat/${DEPLOY_APPNAME}/ --no-progress --sse AES256
+
+    export PREVIOUS_CONFIG_HASH=${PREVIOUS_CONFIG_HASH}
+
+    depth=50
+
+    if [[ "${PREVIOUS_CONFIG_HASH}" != "" ]]; then
+      export JENKINS_JOB="${JOB_URL}CURRENT_GIT_COMMIT=${CONFIG_HASH}&PREVIOUS_GIT_COMMIT=${PREVIOUS_CONFIG_HASH}&SPECIFIC_ENV_ID=${DEPLOY_ENV}&SPECIFIC_SERVICE_ID=${DEPLOY_APPNAME}&depth=${depth}"
+    else
+      export JENKINS_JOB="na"
+    fi
+
+    export DEPLOY_FINISH_TIME_IN_SECONDS=$(date +%s)
+
+    # Clean up the files
+    cd ~
+    rm -rf /tmp/${DEPLOY_ID}
+  scriptType: BASH
+  timeoutMillis: 600000
+  variables:
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+  - description: 'Set the canary traffic option. Example: "0" for 0%, "10" for 10%,
+      leave blank for no canary deploy'
+    name: OVERRIDE_CANARY_TRAFFIC
+scriptType: BASH
+timeoutMillis: 600000
