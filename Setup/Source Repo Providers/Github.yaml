@@ -1,0 +1,11 @@
+harnessApiVersion: '1.0'
+type: GIT
+authorEmailId: casie.souza@harness.io
+authorName: Cassie
+commitMessage: always here :)
+keyAuth: false
+password: gcpkms:cassie-github
+providerType: GIT
+url: https://github.com/csouza-harness/nomad.git
+urlType: REPO
+username: csouza-harness

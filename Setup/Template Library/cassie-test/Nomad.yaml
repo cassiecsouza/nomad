@@ -1,0 +1,75 @@
+harnessApiVersion: '1.0'
+type: CUSTOM_DEPLOYMENT_TYPE
+fetchInstanceScript: |-
+  # Process already obtained instance data into something that
+  # Harness can process.
+  # Script is expected to query Infrastructure and dump json
+  # in $INSTANCE_OUTPUT_PATH file path
+  #
+  # Harness is expected to initialize ${INSTANCE_OUTPUT_PATH}
+  # environment variable - a random unique file path on delegate,
+  # so script execution can save the result.
+  #
+  #
+
+  # Fail on any error
+  set -e
+
+  DEPLOY_ENV=${environmentVariable.DEPLOY_ENV}
+  DEPLOY_APPNAME=${serviceVariable.DEPLOY_APPNAME}
+
+  # Setup the local staging directory and obtain all files.
+  LOCAL_WORKDIR=/tmp/${DEPLOY_APPNAME}-${DEPLOY_ENV}
+  mkdir -p ${LOCAL_WORKDIR}
+  cd ${LOCAL_WORKDIR}
+
+  # Load up the various values.
+  export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+  export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+  export AWS_REGION="${app.defaults.AWS_S3_REGION}"
+
+  # Retrieve the latest deployed information from S3.
+  FETCH_INSTANCE_FILENAME=${DEPLOY_APPNAME}-${DEPLOY_ENV}.sh
+  aws s3 cp s3://harness-bucket-apdx1/fetch-instances/${FETCH_INSTANCE_FILENAME} ${FETCH_INSTANCE_FILENAME} --no-progress
+  source ${FETCH_INSTANCE_FILENAME}
+
+  # Report on what is being done.
+  echo "NOMAD_URL=${NOMAD_URL}"
+  echo "NOMAD_INSTANCE_URL=${NOMAD_INSTANCE_URL}"
+
+  # Get the current set of instances for this allocation
+  echo '{"Instances": []}' > instances.json
+  curl -s -o allocations_json --max-time 10 ${NOMAD_INSTANCE_URL}
+  for allocation_id in $(cat allocations_json | jq -r '.[] | select(.ClientStatus=="running") | .ID'); do
+    echo "${allocation_id}"
+    curl -s -o allocation.json --max-time 10 ${NOMAD_URL}/v1/allocation/${allocation_id}
+
+    # Build the entry
+    allocation_host=$(jq -r '.Resources.Networks[].IP' allocation.json)
+    allocation_port=$(jq -r '.Resources.Networks[].DynamicPorts[] | select(.Label=="https") | .Value' allocation.json)
+    nomad_host=$(jq -r '.Job.TaskGroups[0].Tasks[0].Services[0].Name' allocation.json)
+    nomad_env=$(jq -r '.Job.Meta.consuldc' allocation.json)
+    nomad_instance=$(jq -r '.Name' allocation.json | cut -d[ -f2 | cut -d] -f1)
+    instance_entry='{"host": "'${allocation_host}'", "port": "'${allocation_port}'", "instance": "'${nomad_instance}'", "real": "'${allocation_host}':'${allocation_port}'", "full": "'${nomad_host}'.'${nomad_instance}'.'${nomad_env}'.wbx2.com"}'
+    echo "${instance_entry}"
+
+    # Add it to the list
+    jq ".Instances += [${instance_entry}]" instances.json > instances2.json
+    mv -f instances2.json instances.json
+  done
+
+  echo "OUTPUT PATH: ${INSTANCE_OUTPUT_PATH}"
+  mkdir -p $(dirname ${INSTANCE_OUTPUT_PATH})
+  cp instances.json ${INSTANCE_OUTPUT_PATH}
+  cat instances.json
+
+  # Clean up the files
+  cd ~
+  rm -rf ${LOCAL_WORKDIR}
+hostAttributes:
+  hostname: full
+  ipport: real
+  port: port
+  ip: host
+  instanceindex: instance
+hostObjectArrayPath: instances
