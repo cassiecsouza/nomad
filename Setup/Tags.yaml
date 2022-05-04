@@ -2,6 +2,7 @@ harnessApiVersion: '1.0'
 type: TAG
 tag:
 - name: flavor
+- name: paas
 - name: periodic-redeploy
 - name: service
 - name: template-version
