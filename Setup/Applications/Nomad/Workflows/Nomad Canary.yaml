@@ -1,19 +1,1029 @@
 harnessApiVersion: '1.0'
-type: CANARY
+type: MULTI_SERVICE
 concurrencyStrategy: INFRA
 envName: nomad-env
 failureStrategies:
-- executionScope: WORKFLOW
+- executionScope: WORKFLOW_PHASE
   failureTypes:
   - APPLICATION_ERROR
-  repairActionCode: ROLLBACK_WORKFLOW
+  - VERIFICATION_FAILURE
+  repairActionCode: ROLLBACK_PHASE
   retryCount: 0
-notificationRules:
-- conditions:
-  - FAILED
-  executionScope: WORKFLOW
-  notificationGroupAsExpression: false
-  userGroupAsExpression: false
-  userGroupNames:
-  - Account Administrator
-templatized: false
+phases:
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: nomad Prepare
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Prepare
+    steps:
+    - type: SHELL_SCRIPT
+      name: Check Deploy Lock
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+    - type: COMMAND
+      name: Prepare nomad Staging
+      properties:
+        commandName: Prepare nomad Staging
+        commandType: OTHER
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        outputVars: ''
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 900000
+      templateVariables:
+      - name: DEPLOY_TYPE
+        value: canary
+      - name: CONFIG_HASH
+        value: ${workflow.variables.CONFIG_HASH}
+    - type: SHELL_SCRIPT
+      name: Populate Deploy Variables
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: DEPLOY_CONTROL
+        sweepingOutputScope: WORKFLOW
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_UNIQUE_VALUE
+        value: ${workflow.displayName}
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Canary Deploy Prepare
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Prepare
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.DEPLOY_CANARY} == 'false'
+      scope: ALL_STEPS
+    steps:
+    - type: SHELL_SCRIPT
+      name: Do Nomad and Docker Build
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 1800000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_DEPLOY_TYPE
+        value: canary
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Canary Deploy 5%
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Deploy Canary
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.DEPLOY_CANARY} == 'false'
+      scope: ALL_STEPS
+    steps:
+    - type: BARRIER
+      name: Barrier Canary 5% Start (PROD)
+      properties:
+        identifier: canary-deploy-5-start-PROD
+        templateUuid: null
+        templateVariables: null
+        templateVersion: null
+        timeoutMillis: '600000'
+    - type: SHELL_SCRIPT
+      name: Canary 5% Start Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_step_detail
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+        value: '[ nomad-service ] Canary Deploy 5% Started for a6'
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    - type: SHELL_SCRIPT
+      name: Canary 5%
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - remote-nomad-deployer
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: NOMAD_DEPLOYMENT
+        sweepingOutputScope: PHASE
+        templateExpressions: null
+        timeoutMillis: 3600000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_CANARY_TRAFFIC
+        value: '5'
+    - type: CUSTOM_DEPLOYMENT_FETCH_INSTANCES
+      name: Fetch Instances
+      properties:
+        stateTimeoutInMinutes: 1
+        tags:
+        - remote-nomad-deployer
+    - type: SHELL_SCRIPT
+      name: Canary 5% Complete Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_step_detail
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+        value: '[ nomad-service ] Canary Deploy 5% Completed for a6'
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    stepsInParallel: false
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Verify Service
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.DEPLOY_CANARY} == 'false' || ${workflow.variables.SKIP_VALIDATION} == 'true' || ${workflow.variables.FIRE_AND_FORGET} == 'true'
+      scope: ALL_STEPS
+    steps:
+    - type: SHELL_SCRIPT
+      name: Running nomad-service a6 5% Canary Test Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_step_detail
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+        value: Running nomad-service a6 5% Canary platform/pipeline/public-test/nomad-service/test-nomad-service-canary-test-a6 test
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    - type: SHELL_SCRIPT
+      name: Run SQBU Jenkins Test Job
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 3600000
+      templateVariables:
+      - name: JENKINS_URL
+        value: https://sqbu-jenkins.wbx2.com/service03
+      - name: FIRE_AND_FORGET
+        value: 'false'
+      - name: REMOTE_JOB_PATH
+        value: platform/pipeline/public-test/nomad-service/test-nomad-service-canary-test-a6
+      - name: CUSTOM_PARAMETERS
+    stepsInParallel: true
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Canary Verification Complete
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.DEPLOY_CANARY} == 'false'
+      scope: ALL_STEPS
+    steps:
+    - type: BARRIER
+      name: Barrier Canary 5% Verify End (PROD)
+      properties:
+        identifier: canary-verify-5-end-PROD
+        templateUuid: null
+        templateVariables: null
+        templateVersion: null
+        timeoutMillis: '6000000'
+    - type: SHELL_SCRIPT
+      name: Record Successful Deploy Metrics
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_OK
+        value: 'true'
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    stepsInParallel: true
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Approve Canary
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.DEPLOY_CANARY} == 'false' || ${workflow.variables.REQUIRE_CANARY_APPROVALS} == 'false'
+      scope: ALL_STEPS
+    steps:
+    - type: BARRIER
+      name: Barrier Canary 5% Approved (PROD)
+      properties:
+        identifier: canary-approve-5-PROD
+        timeoutMillis: '2073600000'
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Full Deploy
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Full Deploy
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.FIRE_AND_FORGET} == 'true'
+      scope: SPECIFIC_STEPS
+      steps:
+      - Fetch Instances
+    steps:
+    - type: BARRIER
+      name: Barrier Full Deploy Start (PROD)
+      properties:
+        identifier: full-deploy-start-PROD
+        timeoutMillis: '6000000'
+    - type: SHELL_SCRIPT
+      name: Full Deploy Start Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_step_detail
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+        value: '[ nomad-service ] Full Deploy Started for a6'
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    - type: COMMAND
+      name: Prepare nomad Staging
+      properties:
+        commandName: Prepare nomad Staging
+        commandType: OTHER
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        outputVars: ''
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 900000
+      templateVariables:
+      - name: DEPLOY_TYPE
+        value: ${workflow.variables.DEPLOY_TYPE}
+      - name: CONFIG_HASH
+        value: ${workflow.variables.CONFIG_HASH}
+    - type: SHELL_SCRIPT
+      name: Populate Deploy Variables
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: DEPLOY_CONTROL
+        sweepingOutputScope: PHASE
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_UNIQUE_VALUE
+        value: ${workflow.displayName}
+    - type: SHELL_SCRIPT
+      name: Do Nomad and Docker Build
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 1800000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_DEPLOY_TYPE
+    - type: SHELL_SCRIPT
+      name: Deploy staged nomad service
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - remote-delegate
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: NOMAD_DEPLOYMENT
+        sweepingOutputScope: WORKFLOW
+        templateExpressions: null
+        timeoutMillis: 7200000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_CANARY_TRAFFIC
+    - type: CUSTOM_DEPLOYMENT_FETCH_INSTANCES
+      name: Fetch Instances
+      properties:
+        stateTimeoutInMinutes: 1
+        tags:
+        - remote-nomad-deployer
+    - type: SHELL_SCRIPT
+      name: Full Deploy Completed Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_step_detail
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+        value: '[ nomad-service ] Full Deploy Completed for a6'
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    stepsInParallel: false
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Verify Service
+    stepSkipStrategies:
+    - assertionExpression: ${workflow.variables.SKIP_VALIDATION} == 'true' || ${workflow.variables.FIRE_AND_FORGET} == 'true'
+      scope: ALL_STEPS
+    stepsInParallel: true
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Full Barrier
+    steps:
+    - type: BARRIER
+      name: Barrier Full Deploy End (PROD)
+      properties:
+        identifier: full-deploy-end-PROD
+        timeoutMillis: '6000000'
+    - type: BARRIER
+      name: Barrier Test Start (PROD)
+      properties:
+        identifier: barrier-test-start-PROD
+        timeoutMillis: '6000000'
+    - type: BARRIER
+      name: Barrier Test End (PROD)
+      properties:
+        identifier: barrier-test-end-PROD
+        timeoutMillis: '6000000'
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+postDeploymentSteps:
+- type: SHELL_SCRIPT
+  name: Record Successful Deploy Metrics
+  properties:
+    commandPath: null
+    connectionAttributeName: null
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    host: null
+    publishAsVar: false
+    sshKeyRefName: null
+    sweepingOutputName: null
+    sweepingOutputScope: null
+    templateExpressions: null
+    timeoutMillis: 600000
+  templateVariables:
+  - name: DEPLOY_OK
+    value: 'true'
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+- type: SHELL_SCRIPT
+  name: Publish Deployment to CDP
+  properties:
+    commandPath: null
+    connectionAttributeName: null
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    host: null
+    publishAsVar: false
+    sshKeyRefName: null
+    sweepingOutputName: null
+    sweepingOutputScope: null
+    templateExpressions: null
+    timeoutMillis: 345600000
+  templateVariables:
+  - name: DEPLOY_OK
+    value: 'true'
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+  - name: DEPLOY_FINISH_TIME
+    value: ${context.NOMAD_DEPLOYMENT.DEPLOY_FINISH_TIME_IN_SECONDS}
+  - name: CDP_CLUSTER
+    value: prod-achm
+  - name: CDP_REGION
+    value: US-EAST
+  - name: CDP_ENV_TYPE
+    value: Production
+- type: SHELL_SCRIPT
+  name: Cleanup nomad deploy
+  properties:
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    timeoutMillis: 600000
+  templateVariables:
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+- type: SHELL_SCRIPT
+  name: Deploy Success Notification
+  properties:
+    commandPath: null
+    connectionAttributeName: null
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    host: null
+    publishAsVar: false
+    sshKeyRefName: null
+    sweepingOutputName: null
+    sweepingOutputScope: null
+    templateExpressions: null
+    timeoutMillis: 600000
+  templateVariables:
+  - name: NOTIFY_STAGE
+    value: workflow_success
+  - name: SERVICE_APPNAME
+    value: nomad-service
+  - name: WORKFLOW_EMAILS
+  - name: WORKFLOW_SPARK_IDS
+    value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+  - name: WORKFLOW_PD_KEY
+  - name: PIPELINE_PD_KEY
+  - name: PIPELINE_EMAILS
+  - name: WORKFLOW_CUSTOM_MSG
+  - name: PIPELINE_CUSTOM_MSG
+  - name: PIPELINE_SPARK_IDS
+preDeploymentSteps:
+- type: SHELL_SCRIPT
+  name: Enforce Workflow Access
+  properties:
+    commandPath: null
+    connectionAttributeName: null
+    delegateSelectors:
+    - heavy-lifter
+    executeOnDelegate: true
+    host: null
+    publishAsVar: false
+    sshKeyRefName: null
+    sweepingOutputName: null
+    sweepingOutputScope: null
+    templateExpressions: null
+    timeoutMillis: 600000
+  templateVariables:
+  - name: ALLOWED_GROUPS
+    value: Service Team - conversation-friends-deploy-engineers
+  - name: USER_ID
+    value: ${deploymentTriggeredBy}
+- type: RESOURCE_CONSTRAINT
+  name: 'Resource lock: nomad-a6'
+  properties:
+    holdingScope: WORKFLOW
+    notificationEvents: null
+    notificationGroups: null
+    permits: 1
+    timeoutMillis: 600000
+- type: RESOURCE_CONSTRAINT
+  name: 'Resource lock: nomad'
+  properties:
+    holdingScope: WORKFLOW
+    permits: 1
+    resourceUnit: RESOURCE_LOCK_nomad
+    timeoutMillis: 600000
+rollbackPhases:
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Rollback nomad Prepare
+  phaseNameForRollback: nomad Prepare
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Rollback Service
+    steps:
+    - type: SHELL_SCRIPT
+      name: nomad Prepare Failure Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_failure
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Rollback Canary Deploy Prepare
+  phaseNameForRollback: Canary Deploy Prepare
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Rollback Service
+    steps:
+    - type: SHELL_SCRIPT
+      name: Canary Deploy Prepare Failure Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_failure
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: WORKFLOW_CUSTOM_MSG
+      - name: PIPELINE_CUSTOM_MSG
+      - name: PIPELINE_SPARK_IDS
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Rollback Canary Deploy 5%
+  phaseNameForRollback: Canary Deploy 5%
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Rollback Service
+    steps:
+    - type: SHELL_SCRIPT
+      name: Record Failed Deploy Metrics
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_OK
+        value: 'false'
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    - type: SHELL_SCRIPT
+      name: Rollback nomad Service Canary 5%
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - remote-delegate
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: ROLLBACK_DEPLOY
+        sweepingOutputScope: PHASE
+        templateExpressions: null
+        timeoutMillis: 3600000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_CANARY_TRAFFIC
+        value: '5'
+    - type: SHELL_SCRIPT
+      name: Record 5% killCanary Deploy Metrics
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_OK
+        value: killCanary
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    - type: SHELL_SCRIPT
+      name: Deploy Failure Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_failure
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: WORKFLOW_CUSTOM_MSG
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: PIPELINE_SPARK_IDS
+      - name: PIPELINE_CUSTOM_MSG
+    - type: SHELL_SCRIPT
+      name: Cleanup nomad deploy
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+- type: CUSTOM
+  computeProviderName: DUMMY_CLOUD_PROVIDER
+  daemonSet: false
+  name: Rollback Full Deploy
+  phaseNameForRollback: Full Deploy
+  phaseSteps:
+  - type: CUSTOM_DEPLOYMENT_PHASE_STEP
+    name: Rollback Service
+    steps:
+    - type: SHELL_SCRIPT
+      name: Record Failed Deploy Metrics
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_OK
+        value: 'false'
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    - type: SHELL_SCRIPT
+      name: Publish Failed Deployment to CDP
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_OK
+        value: 'false'
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: DEPLOY_FINISH_TIME
+        value: '0'
+      - name: CDP_CLUSTER
+        value: prod-achm
+      - name: CDP_REGION
+        value: US-EAST
+      - name: CDP_ENV_TYPE
+        value: Production
+    - type: SHELL_SCRIPT
+      name: Rollback nomad Service Full
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - remote-delegate
+        executeOnDelegate: true
+        host: null
+        publishAsVar: true
+        sshKeyRefName: null
+        sweepingOutputName: ROLLBACK_DEPLOY
+        sweepingOutputScope: WORKFLOW
+        templateExpressions: null
+        timeoutMillis: 3600000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+      - name: OVERRIDE_CANARY_TRAFFIC
+    - type: SHELL_SCRIPT
+      name: Deploy Failure Notification
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: NOTIFY_STAGE
+        value: workflow_failure
+      - name: SERVICE_APPNAME
+        value: nomad-service
+      - name: WORKFLOW_EMAILS
+      - name: WORKFLOW_SPARK_IDS
+        value: Y2lzY29zcGFyazovL3VzL1JPT00vMGZhMWM1NjAtNzA4OS0xMWU3LWJhMjktMWY0OTdmODhkOWUy
+      - name: WORKFLOW_PD_KEY
+      - name: WORKFLOW_CUSTOM_MSG
+      - name: PIPELINE_PD_KEY
+      - name: PIPELINE_EMAILS
+      - name: PIPELINE_SPARK_IDS
+      - name: PIPELINE_CUSTOM_MSG
+    - type: SHELL_SCRIPT
+      name: Cleanup nomad deploy
+      properties:
+        commandPath: null
+        connectionAttributeName: null
+        delegateSelectors:
+        - heavy-lifter
+        executeOnDelegate: true
+        host: null
+        publishAsVar: false
+        sshKeyRefName: null
+        sweepingOutputName: null
+        sweepingOutputScope: null
+        templateExpressions: null
+        timeoutMillis: 600000
+      templateVariables:
+      - name: DEPLOY_ID
+        value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+    stepsInParallel: false
+  provisionNodes: false
+  serviceName: nomad-service
+  statefulSet: false
+tags:
+  cdp: enabled
+  deploy-type: deploy
+  env: nomad-env
+  flavor: nomad-standard
+  paas: nomad
+  periodic-redeploy: 'True'
+  service: nomad-service
+  template-version: default
+templatized: true
+userVariables:
+- type: TEXT
+  description: git hash of the configuration repo to use. Get latest hash value from https://sqbu-jenkins.wbx2.com/support/job/platform/job/harness/job/publish-configuration-to-harness-s3/
+  fixed: false
+  mandatory: true
+  name: CONFIG_HASH
+- type: TEXT
+  allowedValues: auto,rolling,blue-green
+  description: 'Type of deploy to use. "auto" uses the configuration, while the others
+    can override. Possible values: "auto", "rolling", "blue-green"'
+  fixed: false
+  mandatory: true
+  name: DEPLOY_TYPE
+  value: auto
+- type: TEXT
+  allowedValues: true,false
+  description: If set to a value of "true" will deploy a canary and test it prior to deploying the full version.
+  fixed: false
+  mandatory: true
+  name: DEPLOY_CANARY
+  value: 'true'
+- type: TEXT
+  allowedValues: true,false
+  description: If set to a value of "true", any canary step approvals that this Workflow requires will be mandatory; otherwise, canary approvals will be skipped. This only applies to canary phases.
+  fixed: false
+  mandatory: true
+  name: REQUIRE_CANARY_APPROVALS
+  value: 'true'
+- type: TEXT
+  allowedValues: true,false
+  description: If set to a value of "true" all Deployment Verification (logs, metrics, tests, etc) will be skipped.
+  fixed: false
+  mandatory: true
+  name: SKIP_VALIDATION
+  value: 'false'
+- type: TEXT
+  allowedValues: true,false
+  description: If set to a value of "true", deployed instances will NOT be checked for health before considering the deploy successful. When set "true", implies that SKIP_VALIDATION=true as well.
+  fixed: false
+  mandatory: true
+  name: FIRE_AND_FORGET
+  value: 'false'
