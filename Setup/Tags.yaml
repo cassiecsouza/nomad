@@ -3,4 +3,5 @@ type: TAG
 tag:
 - name: flavor
 - name: periodic-redeploy
+- name: service
 - name: template-version
