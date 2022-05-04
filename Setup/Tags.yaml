@@ -1,6 +1,7 @@
 harnessApiVersion: '1.0'
 type: TAG
 tag:
+- name: env
 - name: flavor
 - name: paas
 - name: periodic-redeploy
