@@ -1,0 +1,195 @@
+harnessApiVersion: '1.0'
+type: SHELL_SCRIPT
+scriptString: |
+  harnessApiVersion: '1.0'
+  type: SHELL_SCRIPT
+  scriptString: |
+    function extract_configuration(){
+        local tar_file=$1
+        if gpg --batch --yes --passphrase "${app.defaults.CONFIGURATION_KEY}" -o cache-secrets.tar.gz "${tar_file}"; then
+          rm -rf configuration
+          mkdir configuration
+          pushd configuration
+          set +x
+          echo "Tar file is: ${tar_file}"
+          tar -xzf ../cache-secrets.tar.gz
+          rm -rf ../cache-secrets.tar.gz
+          popd
+        else
+          echo "FATAL: failed to extract configuration files"
+          exit 1
+        fi
+    }
+
+
+    # download configuration files from cos and extract the files to folder "configuration"
+    function download_configuration_from_cos(){
+        local hash_value=$1
+        local file_name="${hash_value}.tar.gz.enc"
+        local file_path="s3://harness-bucket-apdx1/configuration/${file_name}"
+        local cache_path="/data/configuration/"
+
+        if [[ -z "${hash_value}" ]]; then
+          echo "FATAL: hash_value is empty"
+          exit 1
+        fi
+
+        if [[ -f "${cache_path}${file_name}" && "${hash_value}" != "HEAD" ]]; then
+            echo "File ${file_name} already exists, no need to download it again, copy it to local"
+            cp "${cache_path}${file_name}" "./"
+        else
+            # start downloading
+            # backup original aws credentials before s3 operations. Be sure this operation not pollute the environment
+            ORIGINAL_AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            ORIGINAL_AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+            # export aws key
+            export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+            export AWS_REGION="${app.defaults.AWS_S3_REGION}"
+
+            if aws s3 cp "${file_path}" "./" --no-progress; then
+              echo "SUCCESS: Downloaded ${file_name} to local!"
+            else
+              # exit if failed to copy, skip the rest actions
+              exit 1
+            fi
+
+            if [[ "${hash_value}" == "HEAD" ]]; then
+                echo "SKIP COPY: configuration version is HEAD"
+            else
+                # in case some delegates don't have this directory
+                mkdir -p "${cache_path}"
+                if cp "./${file_name}" "${cache_path}"; then
+                   echo "SUCCESS: copy ${file_name} to ${cache_path}"
+                else
+                   echo "IGNORE: failed to copy ${file_name} to ${cache_path}"
+                fi
+            fi
+
+            # restore previous environment settings
+            export AWS_ACCESS_KEY_ID="${ORIGINAL_AWS_ACCESS_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${ORIGINAL_AWS_SECRET_ACCESS_KEY}"
+        fi
+
+        # start extract configuration files
+        if extract_configuration "./${file_name}"; then
+          echo "SUCCESS: Configuration files extracted"
+        else
+          exit 1
+        fi
+    }
+    # Stage up a SPLAT deploy
+
+    # Fail on any error
+    set -e
+
+    echo "DEPLOY_ID=${DEPLOY_ID}"
+
+    # Load up the various values.
+    export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+    export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+    export AWS_REGION="${app.defaults.AWS_S3_REGION}"
+    export COS_S3="aws s3 --endpoint-url https://alln-cloud-storage-1.cisco.com"
+    CONTAINER_NAME=harness_deployer-${DEPLOY_ID}
+    WORKDIR="/deploy-workspace"
+
+    # Setup the local staging directory and obtain all files.
+    rm -rf /tmp/${DEPLOY_ID}
+    mkdir /tmp/${DEPLOY_ID}
+    cd /tmp/${DEPLOY_ID}
+    LOCAL_WORKDIR=$(pwd)
+    export DOCKER_CONFIG=${LOCAL_WORKDIR}/.docker
+
+    # Pull the workspace files from S3
+    mkdir workspace
+    pushd workspace
+    aws s3 cp s3://harness-bucket-apdx1/workdir/${DEPLOY_ID}/ . --recursive --no-progress
+    source setupvars.sh
+
+    # Adjust override vars
+    DEPLOY_TYPE="${OVERRIDE_DEPLOY_TYPE:-${DEPLOY_TYPE}}"
+    echo "DEPLOY_TYPE=${DEPLOY_TYPE}"
+    if [ "${DEPLOY_TYPE}" = "canary" ]; then
+      CANARY_OPTS="--canary --traffic 0"
+    fi
+    popd
+
+
+    export AWS_ACCESS_KEY_ID="${app.defaults.CNP_COS_ACCESS_KEY_ID}"
+    export AWS_SECRET_ACCESS_KEY="${app.defaults.CNP_COS_SECRET_ACCESS_KEY}"
+
+    # Add the configuration files and decrypt.
+    download_configuration_from_cos "${CONFIG_HASH}"
+
+    # Get the artifact file.
+    mkdir artifacts
+    pushd artifacts
+    ${COS_S3} cp s3://${DEPLOY_FULL_FILENAME} . --no-progress
+
+    # touch the artifact file so it won't be marked old for removal.
+    # But Cisco RunOn COS doesn't support the normal S3 way of doing things, so must do an actual upload
+    # to change the date. Only do this for full deploy case, no need for canary ones to save some uploading
+    if [[ "${DEPLOY_TYPE}" != "canary" ]]; then
+      ${COS_S3} cp ${DEPLOY_FILENAME} s3://${DEPLOY_FULL_FILENAME} --no-progress
+    fi
+    popd
+
+    export AWS_ACCESS_KEY_ID="${app.defaults.AWS_S3_ACCCES_KEY_ID}"
+    export AWS_SECRET_ACCESS_KEY="${app.defaults.AWS_S3_SECRET_ACCESS_KEY}"
+
+
+    # Pull the container down; ensures that it's the latest-and-greatest.
+    AWS_ECR_PASSWORD=$(aws ecr get-login-password)
+    echo ${AWS_ECR_PASSWORD} | docker login -u AWS --password-stdin 783772908578.dkr.ecr.us-west-2.amazonaws.com
+    docker pull 783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest
+
+    # Yeah, this seems like crazy overkill. But need to get the public host name of this host and it can't be done
+    # or determine from within the Harness container. But it can be done from a container that's attached to the host
+    # network interface.
+    DOCKER_HOSTNAME=$(docker run --rm --network host 783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest hostname)
+
+    # Start the container up and put it in idle so that multiple commands can be executed against it.
+    docker run -d --rm --name ${CONTAINER_NAME} \
+      --network host \
+      -e CONSUL_NO_BASTION=${DOCKER_HOSTNAME}-admin.wbx2.com \
+      -v python-venvs:/python-venvs \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      783772908578.dkr.ecr.us-west-2.amazonaws.com/harness/splat-deployer:latest tail -f /dev/null
+
+    # Populate the container with the necessary files.
+    docker exec ${CONTAINER_NAME} mkdir -p ${WORKDIR}
+    docker cp . ${CONTAINER_NAME}:${WORKDIR}
+
+    # Stage the image.
+    docker exec ${CONTAINER_NAME} /bin/bash -c "source /venv.sh ${WORKDIR}/configuration/scripts/requirements.txt && \
+    cd ${WORKDIR}/configuration && \
+    python scripts/deploy-splat.py harness-stage \
+    --harness-dir ${WORKDIR}/workspace \
+    --version ${DEPLOY_VERSION} \
+    -p ${WORKDIR}/artifacts/${DEPLOY_FILENAME} \
+    ${CANARY_OPTS} \
+    --env ${DEPLOY_ENV} \
+    ${DEPLOY_APPNAME}"
+
+    # Pull the generated files from the container and push to S3
+    pushd workspace
+    docker cp ${CONTAINER_NAME}:${WORKDIR}/workspace/. .
+    aws s3 cp . s3://harness-bucket-apdx1/workdir/${DEPLOY_ID} --no-progress --sse AES256 --recursive
+    popd
+
+    # Kill the container
+    docker rm -f ${CONTAINER_NAME}
+
+    # Clean up the files
+    cd ~
+    rm -rf ${LOCAL_WORKDIR}
+  scriptType: BASH
+  timeoutMillis: 1800000
+  variables:
+  - name: DEPLOY_ID
+    value: ${context.DEPLOY_CONTROL.DEPLOY_ID}
+  - description: 'Override the deploy type: deploy=normal deploy, canary=canary deploy.'
+    name: OVERRIDE_DEPLOY_TYPE
+scriptType: BASH
+timeoutMillis: 600000
